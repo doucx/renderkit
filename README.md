@@ -26,15 +26,14 @@
 
 1.  克隆本仓库或下载 `render.py` 脚本。
     ```bash
-    git clone <your-repo-url>
-    cd <your-repo-name>
+    git clone https://github.com/doucx/renderkit.git
+    cd https://github.com/doucx/renderkit.git
     ```
 
 2.  安装所需的 Python 依赖项。
     ```bash
     pip install -r requirements.txt
     ```
-    (`requirements.txt` 应包含 `typer`, `pyyaml`, `jinja2`)
 
 ## 项目结构
 
