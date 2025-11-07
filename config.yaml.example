@@ -1,0 +1,7 @@
+# 仓库根目录，用于解析 '@' 开头的相对路径
+# 如果留空或删除，相对路径功能将失效并给出警告
+repo_root: '' 
+# repo_root: 'C:\Users\YourUser\Documents\MyRepo' # Windows 示例
+
+# 你也可以在这里定义一些真正全局的变量
+global_author: ''
