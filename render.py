@@ -117,7 +117,16 @@ def process_value(key: str, value: Any, repo_root: Optional[Path]) -> Any:
         # (这部分逻辑不变)
         command = value[1:]
         try:
-            result = subprocess.run(command, shell=True, capture_output=True, text=True, check=True, encoding='utf-8')
+            exec_cwd = repo_root if (repo_root and repo_root.is_dir()) else None
+            result = subprocess.run(
+                command, 
+                shell=True, 
+                capture_output=True, 
+                text=True, 
+                check=True, 
+                encoding='utf-8',
+                cwd=exec_cwd
+            )
             return result.stdout.strip()
         except Exception as e:
             rich_echo(f"  [错误] 执行命令 '{command}' (来自变量 '{key}') 失败: {e}", fg=typer.colors.RED)
