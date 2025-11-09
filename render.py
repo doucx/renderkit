@@ -200,6 +200,13 @@ def load_and_process_configs(
         rich_echo(f"  正在应用 repo_root 覆盖 (-r): {repo_root_override}")
         final_context['repo_root'] = str(repo_root_override)
 
+    # --- 自动设置 repo_root
+    # 如果在配置文件和 -r 参数中都没有找到 repo_root，
+    # 则默认使用项目根目录 (由 -d 或脚本位置决定) 作为 repo_root。
+    if 'repo_root' not in final_context:
+        rich_echo(f"  [信息] 'repo_root' 未指定，自动设置为项目根目录: {project_root}", fg=typer.colors.BLUE)
+        final_context['repo_root'] = str(project_root)
+
     # --- 解析 repo_root ---
     repo_root = None
     if 'repo_root' in final_context:
