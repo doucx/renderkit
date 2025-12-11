@@ -2,7 +2,7 @@ import sys
 import typer
 from pathlib import Path
 from typing import List, Optional
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, meta
 
 from .console import state, rich_echo
 from .config import load_and_process_configs
@@ -76,23 +76,43 @@ def render(
         raise typer.Exit(1)
 
     project_root = directory if directory else Path.cwd()
-
+    env = Environment(autoescape=False, trim_blocks=True, lstrip_blocks=True)
+    
+    required_vars = None
+    
+    if stdin_content is not None or template_path:
+        template_content = stdin_content if stdin_content is not None else template_path.read_text('utf-8')
+        ast = env.parse(template_content)
+        required_vars = meta.find_undeclared_variables(ast)
+    else:
+        # Directory mode: find all variables from all templates first for efficiency
+        templates_dir = project_root / TEMPLATES_DIR_NAME
+        if templates_dir.is_dir():
+            all_vars = set()
+            for template_file in templates_dir.glob('**/*'):
+                if template_file.is_file():
+                    try:
+                        content = template_file.read_text('utf-8')
+                        ast = env.parse(content)
+                        all_vars.update(meta.find_undeclared_variables(ast))
+                    except Exception as e:
+                        rich_echo(f"  [警告] 解析模板 '{template_file.relative_to(templates_dir)}' 失败: {e}", fg=typer.colors.YELLOW)
+            required_vars = all_vars
+    
     context = load_and_process_configs(
         project_root,
         no_project_config,
         global_config_paths or [],
         config_paths or [],
         repo_root_override,
-        set_vars or []
+        set_vars or [],
+        required_vars=required_vars
     )
-
-    env = Environment(autoescape=False, trim_blocks=True, lstrip_blocks=True)
     
     rich_echo("--- 4. 开始渲染 ---", bold=True)
     
     if stdin_content is not None or template_path:
-        template_content = stdin_content if stdin_content is not None else template_path.read_text('utf-8')
-        
+        # Note: template_content is already loaded from above
         render_context = context.copy()
         if scope:
             if scope in render_context and isinstance(render_context[scope], dict):

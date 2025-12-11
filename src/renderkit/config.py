@@ -1,7 +1,7 @@
 import yaml
 import typer
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Set
 
 from .console import rich_echo
 from .utils import deep_merge_dicts, set_nested_key
@@ -16,10 +16,12 @@ def load_and_process_configs(
     global_config_paths: List[Path],
     config_paths: List[Path],
     repo_root_override: Optional[Path],
-    set_vars: List[str]
+    set_vars: List[str],
+    required_vars: Optional[Set[str]] = None
 ) -> Dict[str, Any]:
     """
     根据优先级瀑布流加载、合并和处理所有配置。
+    如果提供了 required_vars, 则只处理这些变量。
     """
     rich_echo("--- 1. 加载配置 ---", bold=True)
     
@@ -82,15 +84,25 @@ def load_and_process_configs(
             repo_root = None
     
     rich_echo("--- 2. 处理变量值 (@, !) ---", bold=True)
+    if required_vars is not None:
+        rich_echo(f"  优化：仅处理模板所需的 {len(required_vars)} 个顶级变量。")
+        # 'repo_root' is essential for other processing, so always include it.
+        required_vars.add('repo_root')
+
     processed_context = {}
     for key, value in final_context.items():
-        if isinstance(value, dict):
-            processed_context[key] = {}
-            for ns_key, ns_value in value.items():
-                processed_context[key][ns_key] = process_value(f"{key}.{ns_key}", ns_value, repo_root)
+        # Process if no filter is provided, or if the key is in the required set.
+        if required_vars is None or key in required_vars:
+            if isinstance(value, dict):
+                processed_context[key] = {}
+                for ns_key, ns_value in value.items():
+                    processed_context[key][ns_key] = process_value(f"{key}.{ns_key}", ns_value, repo_root)
+            else:
+                processed_context[key] = process_value(key, value, repo_root)
         else:
-             processed_context[key] = process_value(key, value, repo_root)
-    
+            # If not required, keep the raw value without processing.
+            processed_context[key] = value
+
     if set_vars:
         rich_echo("--- 3. 应用 --set 变量 ---", bold=True)
         for var in set_vars:
@@ -98,8 +110,16 @@ def load_and_process_configs(
                 rich_echo(f"  [警告] --set 参数格式无效，已跳过: '{var}'", fg=typer.colors.YELLOW)
                 continue
             key_path, value_str = var.split('=', 1)
-            processed_value = process_value(key_path, value_str, repo_root)
-            set_nested_key(processed_context, key_path, processed_value)
-            rich_echo(f"  - {key_path} => (processed value)")
+            
+            # Check if the --set variable is needed
+            top_level_key = key_path.split('.')[0]
+            if required_vars is None or top_level_key in required_vars:
+                processed_value = process_value(key_path, value_str, repo_root)
+                set_nested_key(processed_context, key_path, processed_value)
+                rich_echo(f"  - {key_path} => (processed value)")
+            else:
+                 set_nested_key(processed_context, key_path, value_str)
+                 rich_echo(f"  - (跳过处理) {key_path} => (raw value)")
+
 
     return processed_context
