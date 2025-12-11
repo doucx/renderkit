@@ -116,20 +116,40 @@ Tell me about AI.
 Respond in JSON.
 ```
 
-#### 5. 高级用法：完全独立的渲染
+#### 5. 终极用法：动态命令生成
+`$` 语法的真正威力在于它是一个“渲染后处理”机制。你可以用它来动态地构建命令字符串或文件路径，然后让 `RenderKit` 执行它们。
+
+假设 `config.yaml` 内容为:
+```yaml
+# config.yaml
+branch: "main"
+latest_commit: "$!git log -n 1 --pretty=format:'%h' {{ branch }}"
+```
+
+现在，我们可以在命令行覆盖 `branch` 变量，`RenderKit` 会先渲染出完整的命令字符串 `!git log ... develop`，然后再执行它：
+```bash
+echo "Latest commit on develop: {{ latest_commit }}" | renderkit --set branch=develop
+```
+
+输出 (commit hash 会不同):
+```
+Latest commit on develop: a1b2c3d
+```
+
+#### 6. 高级用法：完全独立的渲染
 不受任何项目配置影响，使用指定的配置文件和作用域来渲染一个模板。
 ```bash
-python render.py --no-project-config \
+renderkit --no-project-config \
                  -c API-keys.yaml \
                  -t my_api_request.json.j2 \
                  -s API \
                  > request.json
 ```
 
-#### 6. CI/CD 场景：覆盖版本号
+#### 7. CI/CD 场景：覆盖版本号
 在渲染整个项目时，从外部传入版本号来覆盖配置文件中的默认值。
 ```bash
-python render.py --set 'KOS.version=1.5.2-beta'
+renderkit --set 'KOS.version=1.5.2-beta'
 ```
 
 ---
@@ -154,7 +174,7 @@ python render.py --set 'KOS.version=1.5.2-beta'
 | **`@`** | `my_prompt: '@prompts/base.md'` | 包含相对于 `repo_root` 的文件内容。`@/path` 和 `@path` 均可。 |
 | **`!`** | `current_git_hash: '!git rev-parse --short HEAD'` | 执行 shell 命令，并将其标准输出作为变量的值。 |
 | **`file://`** | `log_file: 'file:///var/log/syslog'` | 包含位于**绝对路径**或**相对于当前工作目录**的文件内容。用于引用项目外部的文件。 |
-| **`$`** | `full_prompt: '$Prefix:\n{{ base_prompt }}\nSuffix:'` | 将值作为 Jinja2 模板进行渲染，可引用配置上下文中的任何其他变量。 |
+| **`$`** | `dynamic_cmd: '$!echo "Hello {{ user }}"'` | 将值作为 Jinja2 模板渲染，然后对渲染结果**再次处理**。这使得动态构造命令 (`$!`) 或文件路径 (`$@`) 成为可能。 |
 
 ### 文件命名约定
 

@@ -43,3 +43,30 @@ def test_config_dynamic_resolution(project_dir: Path):
     assert context["part"] == "Hello World"
     assert context["full"] == "Prefix: Hello World"
     assert context["literal"] == "Just String"
+
+def test_config_dynamic_combined_syntax(project_dir: Path):
+    """
+    测试 '$' 与 '!' 和 '@' 组合语法的正确性。
+    验证变量可以先被渲染，然后其结果被作为命令或文件路径进行二次处理。
+    """
+    # 准备用于动态文件路径测试的文件
+    dynamic_file = project_dir / "dynamic.txt"
+    dynamic_file.write_text("Dynamic file content")
+
+    set_vars = [
+        "command_name=echo",
+        'dynamic_command=$!{{ command_name }} "Dynamic Command Output"',
+        "filename=dynamic.txt",
+        "dynamic_file_content=$@{{ filename }}",
+    ]
+
+    # 使用 project_dir 作为 repo_root 以便 '@' 可以正确解析
+    context = load_and_process_configs(project_dir, True, [], [], project_dir, set_vars)
+
+    # 验证动态命令
+    assert "dynamic_command" in context
+    assert context["dynamic_command"] == "Dynamic Command Output"
+
+    # 验证动态文件引用
+    assert "dynamic_file_content" in context
+    assert context["dynamic_file_content"] == "Dynamic file content"

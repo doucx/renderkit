@@ -93,46 +93,62 @@ def load_and_process_configs(
         if not repo_root.is_dir():
             rich_echo(f"  [警告] 'repo_root' 指向的路径不是有效目录: {repo_root}", fg=typer.colors.YELLOW)
             repo_root = None
-    
-    rich_echo("--- 2. 处理变量值 (@, !) ---", bold=True)
-    if required_vars is not None:
-        rich_echo(f"  优化：仅处理模板所需的 {len(required_vars)} 个顶级变量。")
-        # 'repo_root' is essential for other processing, so always include it.
-        required_vars.add('repo_root')
 
-    processed_context = {}
-    for key, value in final_context.items():
-        # Process if no filter is provided, or if the key is in the required set.
-        if required_vars is None or key in required_vars:
-            if isinstance(value, dict):
-                processed_context[key] = {}
-                for ns_key, ns_value in value.items():
-                    processed_context[key][ns_key] = process_value(f"{key}.{ns_key}", ns_value, repo_root)
-            else:
-                processed_context[key] = process_value(key, value, repo_root)
-        else:
-            # If not required, keep the raw value without processing.
-            processed_context[key] = value
-
+    # --- 3. 应用 --set 变量 (最高优先级) ---
+    # --set 变量必须在主处理循环之前应用，以确保依赖关系被正确解析
     if set_vars:
-        rich_echo("--- 3. 应用 --set 变量 ---", bold=True)
+        rich_echo("\n--- 3. 应用 --set 变量 ---", bold=True)
         for var in set_vars:
             if '=' not in var:
                 rich_echo(f"  [警告] --set 参数格式无效，已跳过: '{var}'", fg=typer.colors.YELLOW)
                 continue
             key_path, value_str = var.split('=', 1)
-            
-            # Check if the --set variable is needed
-            top_level_key = key_path.split('.')[0]
-            if required_vars is None or top_level_key in required_vars:
-                processed_value = process_value(key_path, value_str, repo_root)
-                set_nested_key(processed_context, key_path, processed_value)
-                rich_echo(f"  - {key_path} => (processed value)")
-            else:
-                 set_nested_key(processed_context, key_path, value_str)
-                 rich_echo(f"  - (跳过处理) {key_path} => (raw value)")
+            set_nested_key(final_context, key_path, value_str)
+            rich_echo(f"  - {key_path} = (raw value)")
 
-    # 3.5 解析动态引用 ($)
-    processed_context = resolve_dynamic_values(processed_context)
+    # --- 迭代处理依赖 ---
+    processed_context = final_context.copy()
+    if required_vars is None:
+        # 如果没有模板（例如，只使用--set），则所有变量都需要处理
+        known_dependencies = set(processed_context.keys())
+    else:
+        known_dependencies = required_vars.copy()
+        
+    known_dependencies.add('repo_root') # Always needed
+    max_passes = 5
+
+    for i in range(1, max_passes + 1):
+        rich_echo(f"\n--- 4. 处理轮次 {i} (已知依赖: {len(known_dependencies)} 个) ---", bold=True)
+        
+        # 步骤 4.1: 处理已知依赖 (@, !)
+        context_for_this_pass = {}
+        for key, value in processed_context.items():
+            if key in known_dependencies:
+                 if isinstance(value, dict):
+                     context_for_this_pass[key] = {}
+                     for ns_key, ns_value in value.items():
+                         context_for_this_pass[key][ns_key] = process_value(f"{key}.{ns_key}", ns_value, repo_root)
+                 else:
+                     context_for_this_pass[key] = process_value(key, value, repo_root)
+            else:
+                context_for_this_pass[key] = value
+        
+        processed_context = context_for_this_pass
+
+        # 步骤 4.2: 解析动态值 ($) 并发现新依赖
+        rich_echo("  正在解析动态引用 ($)...")
+        # 此时，整个上下文都用于解析，以确保跨变量引用有效
+        processed_context, discovered_deps = resolve_dynamic_values(processed_context, repo_root)
+        
+        newly_discovered = discovered_deps - known_dependencies
+        
+        if not newly_discovered:
+            rich_echo("  ...依赖关系已稳定。")
+            break
+        
+        rich_echo(f"  ...发现 {len(newly_discovered)} 个新依赖项，准备下一轮处理。")
+        known_dependencies.update(newly_discovered)
+    else:
+        rich_echo(f"[警告] 达到 {max_passes} 轮处理上限，可能存在循环依赖。", fg=typer.colors.YELLOW)
 
     return processed_context
