@@ -40,12 +40,23 @@ def load_and_process_configs(
                 parts = config_file.stem.split('-', 1)
                 if len(parts) > 0:
                     prefix = parts[0]
-                    content = yaml.safe_load(config_file.read_text('utf-8')) or []
-                    namespaced_contexts.setdefault(prefix, {})
-                    for item in content:
-                        if isinstance(item, dict) and len(item) == 1:
-                            key, value = next(iter(item.items()))
-                            namespaced_contexts[prefix][key] = value
+                    content = yaml.safe_load(config_file.read_text('utf-8'))
+                    if not content:
+                        continue
+
+                    current_ns_context = namespaced_contexts.setdefault(prefix, {})
+                    
+                    if isinstance(content, dict):
+                        # 直接合并字典格式的配置
+                        namespaced_contexts[prefix] = deep_merge_dicts(content, current_ns_context)
+                    elif isinstance(content, list):
+                        # 处理列表格式的配置
+                        temp_dict = {}
+                        for item in content:
+                            if isinstance(item, dict) and len(item) == 1:
+                                key, value = next(iter(item.items()))
+                                temp_dict[key] = value
+                        namespaced_contexts[prefix] = deep_merge_dicts(temp_dict, current_ns_context)
 
     for g_path in global_config_paths:
         rich_echo(f"  正在应用全局配置文件 (-g): {g_path}")
