@@ -44,7 +44,6 @@
 
 ```
 .
-├── render.py                # 主脚本
 ├── config.yaml              # 基础配置文件 (全局变量, repo_root)
 ├── configs/                 # 存放带命名空间的配置文件
 │   ├── KOS-main.yaml
