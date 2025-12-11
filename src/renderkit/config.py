@@ -120,34 +120,39 @@ def load_and_process_configs(
     for i in range(1, max_passes + 1):
         rich_echo(f"\n--- 4. 处理轮次 {i} (已知依赖: {len(known_dependencies)} 个) ---", bold=True)
         
-        # 步骤 4.1: 处理已知依赖 (@, !)
-        context_for_this_pass = {}
-        for key, value in processed_context.items():
-            if key in known_dependencies:
-                 if isinstance(value, dict):
-                     context_for_this_pass[key] = {}
-                     for ns_key, ns_value in value.items():
-                         context_for_this_pass[key][ns_key] = process_value(f"{key}.{ns_key}", ns_value, repo_root)
-                 else:
-                     context_for_this_pass[key] = process_value(key, value, repo_root)
-            else:
-                context_for_this_pass[key] = value
-        
-        processed_context = context_for_this_pass
+        # 记录当前状态以检测变化
+        import json
+        try:
+            # 使用 JSON 序列化作为一种简单的“哈希”来检测变更
+            # default=str 用于处理 Path 对象等不可序列化类型
+            snapshot_before = json.dumps(processed_context, sort_keys=True, default=str)
+        except Exception:
+            snapshot_before = str(processed_context)
 
-        # 步骤 4.2: 解析动态值 ($) 并发现新依赖
+        # 步骤 4.1: 解析动态值 ($) 并发现新依赖
         rich_echo("  正在解析动态引用 ($)...")
-        # 此时，整个上下文都用于解析，以确保跨变量引用有效
-        processed_context, discovered_deps = resolve_dynamic_values(processed_context, repo_root)
+        # 整个上下文用于渲染，但只处理已知依赖以避免不必要的副作用
+        processed_context, discovered_deps = resolve_dynamic_values(processed_context, repo_root, known_dependencies)
         
+        try:
+            snapshot_after = json.dumps(processed_context, sort_keys=True, default=str)
+        except Exception:
+            snapshot_after = str(processed_context)
+
+        has_changed = snapshot_before != snapshot_after
         newly_discovered = discovered_deps - known_dependencies
         
-        if not newly_discovered:
-            rich_echo("  ...依赖关系已稳定。")
+        if not newly_discovered and not has_changed:
+            rich_echo("  ...依赖关系已稳定且数值收敛。")
             break
         
-        rich_echo(f"  ...发现 {len(newly_discovered)} 个新依赖项，准备下一轮处理。")
-        known_dependencies.update(newly_discovered)
+        if newly_discovered:
+            rich_echo(f"  ...发现 {len(newly_discovered)} 个新依赖项。")
+            known_dependencies.update(newly_discovered)
+        
+        if has_changed:
+            rich_echo("  ...数值发生变化，继续迭代以确保传播。")
+
     else:
         rich_echo(f"[警告] 达到 {max_passes} 轮处理上限，可能存在循环依赖。", fg=typer.colors.YELLOW)
 

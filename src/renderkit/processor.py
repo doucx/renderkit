@@ -69,41 +69,47 @@ def process_value(key: str, value: Any, repo_root: Optional[Path]) -> Any:
 
     return value
 
-def resolve_dynamic_values(context: Dict[str, Any], repo_root: Optional[Path]) -> Tuple[Dict[str, Any], Set[str]]:
+def resolve_dynamic_values(context: Dict[str, Any], repo_root: Optional[Path], dependencies_to_process: Set[str]) -> Tuple[Dict[str, Any], Set[str]]:
     """
     解析以 '$' 开头的配置值，将其作为 Jinja2 模板进行渲染。
+    此函数只处理 `dependencies_to_process` 中指定的顶层键，以避免不必要的副作用。
     渲染后的结果会被再次处理，以支持 `$!` 和 `$@` 语法。
     同时，它会收集在这些模板中发现的所有变量依赖。
     """
     env = Environment(autoescape=False)
     discovered_dependencies = set()
-    
-    # 递归遍历字典并原地更新
-    def walk_and_resolve(d: Dict[str, Any]):
-        for k, v in list(d.items()):
-            if isinstance(v, dict):
-                walk_and_resolve(v)
-            elif isinstance(v, str) and v.startswith('$'):
-                template_src = v[1:] # 去掉前缀 $
-                
-                # 发现新的依赖
-                try:
-                    ast = env.parse(template_src)
-                    discovered_dependencies.update(meta.find_undeclared_variables(ast))
-                except Exception:
-                    pass # 渲染时会报告更详细的错误
 
-                try:
-                    # 步骤 1: 使用当前的完整 context 进行渲染
-                    rendered = env.from_string(template_src).render(context)
-                    
-                    # 步骤 2: 将渲染结果再次送入 process_value，以处理 `!` 和 `@`
-                    final_value = process_value(k, rendered, repo_root)
+    def resolve_node(node: Any, key_path: str) -> Any:
+        """递归处理一个节点 (字典或值)"""
+        if isinstance(node, dict):
+            # 递归处理字典的每个值
+            return {k: resolve_node(v, f"{key_path}.{k}") for k, v in node.items()}
+        
+        if not isinstance(node, str):
+            return node
 
-                    if final_value != v:
-                        d[k] = final_value
-                except Exception as e:
-                    rich_echo(f"  [警告] 动态解析变量 '{k}' 失败: {e}", fg=typer.colors.YELLOW)
-    
-    walk_and_resolve(context)
+        if node.startswith('$'):
+            template_src = node[1:]
+            try:
+                ast = env.parse(template_src)
+                discovered_dependencies.update(meta.find_undeclared_variables(ast))
+            except Exception:
+                pass
+
+            try:
+                rendered = env.from_string(template_src).render(context)
+                final_value = process_value(key_path, rendered, repo_root)
+                return final_value
+            except Exception as e:
+                rich_echo(f"  [警告] 动态解析变量 '{key_path}' 失败: {e}", fg=typer.colors.YELLOW)
+                return node # Return original value on failure
+        
+        # 处理普通的 @ 和 ! (不带 $ 前缀的)
+        return process_value(key_path, node, repo_root)
+
+    # 只迭代需要处理的顶层依赖项
+    for key in dependencies_to_process:
+        if key in context:
+            context[key] = resolve_node(context[key], key)
+
     return context, discovered_dependencies
