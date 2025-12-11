@@ -24,16 +24,17 @@
 
 ## 安装 🔧
 
-1.  克隆本仓库或下载 `render.py` 脚本。
+1.  克隆本仓库。
     ```bash
     git clone https://github.com/doucx/renderkit.git
-    cd https://github.com/doucx/renderkit.git
+    cd renderkit
     ```
 
-2.  安装所需的 Python 依赖项。
+2.  安装项目。建议在虚拟环境中使用可编辑模式安装，以便开发：
     ```bash
-    pip install -r requirements.txt
+    pip install -e .
     ```
+    这将会把 `renderkit` 命令安装到你的环境中。
 
 ## 项目结构
 
@@ -74,19 +75,21 @@
 #### 1. 基本用法：渲染整个项目
 在项目目录下运行，`RenderKit` 会渲染 `templates/` 目录下的所有文件到 `outputs/`。
 ```bash
-python render.py
+renderkit
+# 或者指定目录
+renderkit -d .
 ```
 
 #### 2. 单文件渲染
 使用项目配置渲染一个特定的模板，并将结果重定向到文件。
 ```bash
-python render.py -t templates/KOS/tool.md > final_tool.md
+renderkit -t templates/KOS/tool.md > final_tool.md
 ```
 
 #### 3. 管道模式与动态变量
 将 `echo` 的输出作为模板，并使用 `--set` 动态传入变量。
 ```bash
-echo "User: {{ user }}, Time: {{ time }}" | python render.py --set user=$USER --set 'time=!date'
+echo "User: {{ user }}, Time: {{ time }}" | renderkit --set user=$USER --set 'time=!date'
 ```
 
 #### 4. 高级用法：完全独立的渲染

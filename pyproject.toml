@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "renderkit"
+version = "1.0.0"
+authors = [
+  { name="Your Name", email="you@example.com" },
+]
+description = "一个强大的、由配置驱动的 Jinja2 命令行渲染工具"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "typer[all]",
+    "pyyaml",
+    "jinja2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+]
+
+[project.scripts]
+renderkit = "renderkit.cli:app"
