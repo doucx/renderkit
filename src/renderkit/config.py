@@ -5,7 +5,7 @@ from typing import List, Optional, Dict, Any, Set
 
 from .console import rich_echo
 from .utils import deep_merge_dicts, set_nested_key
-from .processor import process_value
+from .processor import process_value, resolve_dynamic_values
 
 CONFIGS_DIR_NAME = "configs"
 GLOBAL_CONFIG_FILENAME = "config.yaml"
@@ -121,5 +121,7 @@ def load_and_process_configs(
                  set_nested_key(processed_context, key_path, value_str)
                  rich_echo(f"  - (跳过处理) {key_path} => (raw value)")
 
+    # 3.5 解析动态引用 ($)
+    processed_context = resolve_dynamic_values(processed_context)
 
     return processed_context

@@ -25,3 +25,21 @@ def test_config_loading_no_project_config(project_dir: Path):
     assert "project_name" not in context
     assert "KOS" not in context
     assert "repo_root" in context # repo_root is auto-detected
+
+def test_config_dynamic_resolution(project_dir: Path):
+    # Test recursive resolution: full -> part -> base
+    # And referencing a --set variable
+    
+    set_vars = [
+        "base=World",
+        "part=$Hello {{ base }}",
+        "full=$Prefix: {{ part }}",
+        "literal=$Just String"
+    ]
+    
+    context = load_and_process_configs(project_dir, True, [], [], None, set_vars)
+    
+    assert context["base"] == "World"
+    assert context["part"] == "Hello World"
+    assert context["full"] == "Prefix: Hello World"
+    assert context["literal"] == "Just String"

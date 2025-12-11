@@ -1,9 +1,10 @@
 import sys
 import subprocess
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Dict
 from urllib.parse import urlparse, unquote
 import typer
+from jinja2 import Environment
 
 from .console import rich_echo
 
@@ -67,3 +68,50 @@ def process_value(key: str, value: Any, repo_root: Optional[Path]) -> Any:
             return f"<渲染错误: 命令执行失败>"
 
     return value
+
+def resolve_dynamic_values(context: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    解析以 '$' 开头的配置值，将其作为 Jinja2 模板进行渲染。
+    支持多轮解析以处理变量间的依赖关系。
+    """
+    env = Environment(autoescape=False)
+    max_passes = 5
+    
+    # 仅在第一轮输出提示
+    rich_echo("--- 3.5. 解析动态引用 ($) ---", bold=True)
+
+    for i in range(max_passes):
+        has_changes = False
+        resolved_count = 0
+        
+        # 递归遍历字典并原地更新
+        def walk_and_resolve(d: Dict[str, Any]):
+            nonlocal has_changes, resolved_count
+            for k, v in list(d.items()):
+                if isinstance(v, dict):
+                    walk_and_resolve(v)
+                elif isinstance(v, str) and v.startswith('$'):
+                    template_src = v[1:] # 去掉前缀 $
+                    try:
+                        # 使用当前的完整 context 进行渲染
+                        rendered = env.from_string(template_src).render(context)
+                        
+                        # 如果渲染结果不同（通常意味着 $ 被去掉了，或者变量被替换了），则更新
+                        if rendered != v:
+                            d[k] = rendered
+                            has_changes = True
+                            resolved_count += 1
+                            # 调试输出
+                            # rich_echo(f"    - Pass {i+1}: Resolved {k}")
+                    except Exception as e:
+                        rich_echo(f"  [警告] 动态解析变量 '{k}' 失败: {e}", fg=typer.colors.YELLOW)
+        
+        walk_and_resolve(context)
+        
+        if resolved_count > 0:
+            rich_echo(f"  Pass {i+1}: 解析了 {resolved_count} 个变量")
+
+        if not has_changes:
+            break
+            
+    return context
