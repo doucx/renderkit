@@ -17,6 +17,8 @@
     *   **`@`**: 轻松地将项目内文件内容注入变量。
     *   **`file://`**: 引用系统上任何位置的绝对或相对路径文件。
     *   **`!`**: 执行 shell 命令并将其实时输出作为变量值。
+*   **动态值解析**:
+    *   **`$`**: 使用 Jinja2 语法直接在配置值中引用其他变量，构建复杂的组合式配置。
 *   **命名空间与作用域**:
     *   `configs/` 目录下的文件自动创建命名空间 (`KOS-*.yaml` -> `KOS.variable`)。
     *   为模板自动应用作用域，简化变量访问。
@@ -92,7 +94,30 @@ renderkit -t templates/KOS/tool.md > final_tool.md
 echo "User: {{ user }}, Time: {{ time }}" | renderkit --set user=$USER --set 'time=!date'
 ```
 
-#### 4. 高级用法：完全独立的渲染
+#### 4. 高级用法：组合动态变量
+在配置文件中定义一个基础变量，然后用 `$` 语法构建一个更复杂的变量。
+
+假设 `config.yaml` 内容为:
+```yaml
+# config.yaml
+base_prompt: "Tell me about {{ topic }}."
+full_prompt: "$Instruction:\n{{ base_prompt }}\n\nRespond in JSON."
+```
+
+运行命令:
+```bash
+echo "{{ full_prompt }}" | renderkit --set topic=AI
+```
+
+输出:
+```
+Instruction:
+Tell me about AI.
+
+Respond in JSON.
+```
+
+#### 5. 高级用法：完全独立的渲染
 不受任何项目配置影响，使用指定的配置文件和作用域来渲染一个模板。
 ```bash
 python render.py --no-project-config \
@@ -102,7 +127,7 @@ python render.py --no-project-config \
                  > request.json
 ```
 
-#### 5. CI/CD 场景：覆盖版本号
+#### 6. CI/CD 场景：覆盖版本号
 在渲染整个项目时，从外部传入版本号来覆盖配置文件中的默认值。
 ```bash
 python render.py --set 'KOS.version=1.5.2-beta'
@@ -130,6 +155,7 @@ python render.py --set 'KOS.version=1.5.2-beta'
 | **`@`** | `my_prompt: '@prompts/base.md'` | 包含相对于 `repo_root` 的文件内容。`@/path` 和 `@path` 均可。 |
 | **`!`** | `current_git_hash: '!git rev-parse --short HEAD'` | 执行 shell 命令，并将其标准输出作为变量的值。 |
 | **`file://`** | `log_file: 'file:///var/log/syslog'` | 包含位于**绝对路径**或**相对于当前工作目录**的文件内容。用于引用项目外部的文件。 |
+| **`$`** | `full_prompt: '$Prefix:\n{{ base_prompt }}\nSuffix:'` | 将值作为 Jinja2 模板进行渲染，可引用配置上下文中的任何其他变量。 |
 
 ### 文件命名约定
 
