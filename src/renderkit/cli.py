@@ -1,12 +1,13 @@
 import sys
 import typer
 from pathlib import Path
-from typing import List, Optional
-from jinja2 import Environment, FileSystemLoader, meta
+from typing import List, Optional, Set
+from jinja2 import Environment, FileSystemLoader, meta, Undefined
 
 from .console import state, rich_echo, rich_debug
-from .config import load_and_process_configs
+from .config import load_raw_context, execute_plan
 from .processor import process_value
+from .tracker import create_tracking_context
 
 TEMPLATES_DIR_NAME = "templates"
 OUTPUTS_DIR_NAME = "outputs"
@@ -16,6 +17,17 @@ app = typer.Typer(
     add_completion=False,
     rich_markup_mode="markdown"
 )
+
+# 使用一个静默的 Undefined，防止在追踪阶段因为访问了未定义变量而报错
+class SilentUndefined(Undefined):
+    def __getattr__(self, name):
+        return SilentUndefined()
+    def __getitem__(self, key):
+        return SilentUndefined()
+    def __str__(self):
+        return ""
+    def __bool__(self):
+        return False
 
 @app.command()
 def render(
@@ -71,6 +83,9 @@ def render(
     state.quiet = quiet
     state.debug = debug
     
+    project_root = directory if directory else Path.cwd()
+    
+    # --- Step 1: Prepare Input ---
     stdin_content = None
     if not sys.stdin.isatty():
         content = sys.stdin.read()
@@ -80,50 +95,122 @@ def render(
     if stdin_content is not None and template_path:
         rich_echo("[错误] 不能同时从 stdin 和 -t/--template 提供模板。", fg=typer.colors.RED)
         raise typer.Exit(1)
-
-    project_root = directory if directory else Path.cwd()
-    env = Environment(autoescape=False, trim_blocks=True, lstrip_blocks=True)
-    
-    required_vars = None
-    
-    if stdin_content is not None or template_path:
-        template_content = stdin_content if stdin_content is not None else template_path.read_text('utf-8')
-        ast = env.parse(template_content)
-        required_vars = meta.find_undeclared_variables(ast)
-    else:
-        # Directory mode: find all variables from all templates first for efficiency
-        templates_dir = project_root / TEMPLATES_DIR_NAME
-        if templates_dir.is_dir():
-            all_vars = set()
-            for template_file in templates_dir.glob('**/*'):
-                if template_file.is_file():
-                    try:
-                        content = template_file.read_text('utf-8')
-                        ast = env.parse(content)
-                        all_vars.update(meta.find_undeclared_variables(ast))
-                    except Exception as e:
-                        rich_echo(f"  [警告] 解析模板 '{template_file.relative_to(templates_dir)}' 失败: {e}", fg=typer.colors.YELLOW)
-            required_vars = all_vars
-    
-    context, repo_root = load_and_process_configs(
+        
+    # --- Step 2: Load Raw Config ---
+    raw_context, repo_root = load_raw_context(
         project_root,
         no_project_config,
         global_config_paths or [],
         config_paths or [],
         repo_root_override,
-        set_vars or [],
-        required_vars=required_vars
+        set_vars or []
+    )
+    
+    # --- Step 3: Dependency Discovery (Dry Run) ---
+    rich_echo("--- 1.5 依赖发现 (Dry Run) ---", bold=True)
+    tracking_context, tracker = create_tracking_context(raw_context)
+    
+    # 使用静默的 Environment 进行探测，防止报错
+    probe_env = Environment(
+        autoescape=False, 
+        undefined=SilentUndefined,
+        trim_blocks=True, 
+        lstrip_blocks=True
     )
 
-    import json
-    # 使用 default=str 来处理 Path 等不可序列化对象
-    rich_debug(f"最终上下文准备就绪: {json.dumps(context, indent=2, default=str)}")
+    templates_to_process = [] # List of (template_source, template_name_for_log, scope_override)
+
+    if stdin_content is not None:
+        templates_to_process.append((stdin_content, "<stdin>", scope))
+    elif template_path:
+        content = template_path.read_text('utf-8')
+        templates_to_process.append((content, str(template_path), scope))
+    else:
+        # Directory mode
+        templates_dir = project_root / TEMPLATES_DIR_NAME
+        if templates_dir.is_dir():
+            for template_file in templates_dir.glob('**/*'):
+                if template_file.is_file():
+                    try:
+                        content = template_file.read_text('utf-8')
+                        relative_path = template_file.relative_to(templates_dir)
+                        
+                        # Determine scope
+                        dir_scope = None
+                        if len(relative_path.parts) > 1:
+                            dir_scope = relative_path.parts[0]
+                        
+                        templates_to_process.append((content, str(relative_path), dir_scope))
+                    except Exception as e:
+                        rich_echo(f"  [警告] 读取模板 '{template_file}' 失败: {e}", fg=typer.colors.YELLOW)
+
+    # Run discovery on all templates
+    for content, name, tmpl_scope in templates_to_process:
+        try:
+            # 1. Static Analysis: Find undeclared variables (covers top-level vars effectively)
+            # This is crucial because TrackingDict might be bypassed for top-level scalars in Jinja2 context
+            ast = probe_env.parse(content)
+            static_vars = meta.find_undeclared_variables(ast)
+            for var in static_vars:
+                tracker.accessed_paths.add(var)
+
+            # 2. Dynamic Discovery (Dry Run): Handle dynamic constructs and scope injection
+            
+            # Since scope injection is: context.update(context[scope])
+            # We can't easily deep copy TrackingDict.
+            # But we can create a temporary dict that points to the same underlying TrackingDict nodes.
+            # Actually, TrackingDict inherits from dict, so .copy() works (shallow).
+            render_ctx = tracking_context.copy()
+            
+            if tmpl_scope:
+                if tmpl_scope in render_ctx and isinstance(render_ctx[tmpl_scope], dict):
+                     render_ctx.update(render_ctx[tmpl_scope])
+            
+            probe_env.from_string(content).render(render_ctx)
+        except Exception as e:
+            rich_debug(f"[Discovery] 模板 '{name}' 探测失败: {e}")
+            # Ignore errors in dry run, maybe required vars are missing, we'll catch it in real run
+            pass
+
+    # Pruning Optimization:
+    # Remove variables that are parents of other accessed variables.
+    # This prevents full namespace loading when only specific attributes are accessed.
+    # e.g., if we have {'KOS', 'KOS.version'}, we only keep 'KOS.version'.
+    raw_vars = tracker.accessed_paths
+    required_vars = set()
+    for var in raw_vars:
+        # Keep var if it is NOT a prefix (parent) of any other variable in the set
+        # We look for "var." at the start of other variables
+        is_parent = False
+        prefix = f"{var}."
+        for other in raw_vars:
+            if other.startswith(prefix):
+                is_parent = True
+                break
+        
+        if not is_parent:
+            required_vars.add(var)
+
+    rich_debug(f"精确依赖发现结果 (优化后): {required_vars}")
+
+    # --- Step 4: Execute Plan ---
+    final_context = execute_plan(raw_context, repo_root, required_vars)
     
+    import json
+    rich_debug(f"最终上下文准备就绪: {json.dumps(final_context, indent=2, default=str)}")
+    
+    # --- Step 5: Final Render ---
     rich_echo("--- 4. 开始渲染 ---", bold=True)
     
+    # Use standard environment for final render
+    env = Environment(autoescape=False, trim_blocks=True, lstrip_blocks=True)
+    
     if stdin_content is not None or template_path:
-        # Note: template_content is already loaded from above
-        render_context = context.copy()
+        # Single file mode
+        # Note: We already loaded content into templates_to_process[0]
+        template_content = templates_to_process[0][0]
+        
+        render_context = final_context.copy()
         if scope:
             if scope in render_context and isinstance(render_context[scope], dict):
                 rich_echo(f"  应用作用域 (-s): '{scope}'")
@@ -136,9 +223,7 @@ def render(
             output = template.render(render_context)
             
             # --- Post-Render Evaluation ---
-            # If the entire rendered output is another dynamic variable, process it.
             if output.startswith('$'):
-                # The key_path 'final_render' is arbitrary for logging purposes.
                 final_output = process_value("final_render", output[1:], repo_root)
                 print(final_output, end='')
             else:
@@ -149,6 +234,7 @@ def render(
             raise typer.Exit(1)
             
     else:
+        # Directory mode
         templates_dir = project_root / TEMPLATES_DIR_NAME
         outputs_dir = project_root / OUTPUTS_DIR_NAME
         
@@ -165,7 +251,7 @@ def render(
             relative_path = template_file.relative_to(templates_dir)
             rich_echo(f"\n* 正在处理: {relative_path}")
             
-            render_context = context.copy()
+            render_context = final_context.copy()
             if len(relative_path.parts) > 1:
                 dir_scope = relative_path.parts[0]
                 if dir_scope in render_context and isinstance(render_context[dir_scope], dict):

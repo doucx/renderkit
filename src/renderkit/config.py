@@ -1,7 +1,7 @@
 import yaml
 import typer
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Set
+from typing import List, Optional, Dict, Any, Set, Tuple
 
 from .console import rich_echo, rich_debug
 from .utils import deep_merge_dicts, set_nested_key
@@ -11,24 +11,20 @@ from .processor import PlanExecutor
 CONFIGS_DIR_NAME = "configs"
 GLOBAL_CONFIG_FILENAME = "config.yaml"
 
-def load_and_process_configs(
+def load_raw_context(
     project_root: Path,
     no_project_config: bool,
     global_config_paths: List[Path],
     config_paths: List[Path],
     repo_root_override: Optional[Path],
-    set_vars: List[str],
-    required_vars: Optional[Set[str]] = None
-) -> Dict[str, Any]:
+    set_vars: List[str]
+) -> Tuple[Dict[str, Any], Path]:
     """
-    基于图的确定性配置加载流程。
     Phase 1: 加载所有原始 YAML 到一个大字典 (Raw Context)。
-    Phase 2: 构建依赖图并生成执行计划 (Topological Sort)。
-    Phase 3: 按计划顺序逐个渲染和执行 (Execution)。
+    返回 (raw_context, repo_root)
     """
     rich_echo("--- 1. 加载配置 (Raw Loading) ---", bold=True)
     
-    # --- 1. Load Raw Configs ---
     raw_context = {}
     namespaced_contexts = {}
 
@@ -66,7 +62,6 @@ def load_and_process_configs(
     for c_path in config_paths:
         prefix = c_path.stem.split('-', 1)[0]
         override = yaml.safe_load(c_path.read_text('utf-8')) or {}
-        # Normalize logic again for safety
         if isinstance(override, list):
             temp = {}
             for item in override: temp.update(item)
@@ -92,7 +87,17 @@ def load_and_process_configs(
             if '=' in var:
                 key, val = var.split('=', 1)
                 set_nested_key(raw_context, key, val)
+    
+    return raw_context, repo_root
 
+def execute_plan(
+    raw_context: Dict[str, Any],
+    repo_root: Path,
+    required_vars: Optional[Set[str]] = None
+) -> Dict[str, Any]:
+    """
+    Phase 2 & 3: 构建图并执行。
+    """
     # --- 2. Build Graph & Plan ---
     rich_echo("--- 2. 构建依赖图 (Dependency Analysis) ---", bold=True)
     graph = DependencyGraph()
@@ -109,7 +114,26 @@ def load_and_process_configs(
     # --- 3. Execute Plan ---
     rich_echo("--- 3. 执行渲染 (Deterministic Execution) ---", bold=True)
     executor = PlanExecutor(repo_root)
-    
     final_context = executor.execute(plan, {})
 
+    return final_context
+
+# 保持向后兼容（为了测试用例），或者如果测试用例依赖它，我们可以重写它来调用上面两个函数
+def load_and_process_configs(
+    project_root: Path,
+    no_project_config: bool,
+    global_config_paths: List[Path],
+    config_paths: List[Path],
+    repo_root_override: Optional[Path],
+    set_vars: List[str],
+    required_vars: Optional[Set[str]] = None
+) -> Tuple[Dict[str, Any], Path]:
+    
+    raw_context, repo_root = load_raw_context(
+        project_root, no_project_config, global_config_paths, 
+        config_paths, repo_root_override, set_vars
+    )
+    
+    final_context = execute_plan(raw_context, repo_root, required_vars)
+    
     return final_context, repo_root
