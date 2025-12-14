@@ -4,8 +4,9 @@ from pathlib import Path
 from typing import List, Optional
 from jinja2 import Environment, FileSystemLoader, meta
 
-from .console import state, rich_echo
+from .console import state, rich_echo, rich_debug
 from .config import load_and_process_configs
+from .processor import process_value
 
 TEMPLATES_DIR_NAME = "templates"
 OUTPUTS_DIR_NAME = "outputs"
@@ -59,11 +60,16 @@ def render(
         False, "-q", "--quiet",
         help="安静模式，只输出最终结果 (stdout模式) 或错误信息。"
     ),
+    debug: bool = typer.Option(
+        False, "--debug",
+        help="启用详细的调试日志，输出到 stderr。"
+    ),
 ):
     """
     渲染 Jinja2 模板，支持分层配置和多种输入/输出模式。
     """
     state.quiet = quiet
+    state.debug = debug
     
     stdin_content = None
     if not sys.stdin.isatty():
@@ -99,7 +105,7 @@ def render(
                         rich_echo(f"  [警告] 解析模板 '{template_file.relative_to(templates_dir)}' 失败: {e}", fg=typer.colors.YELLOW)
             required_vars = all_vars
     
-    context = load_and_process_configs(
+    context, repo_root = load_and_process_configs(
         project_root,
         no_project_config,
         global_config_paths or [],
@@ -108,6 +114,10 @@ def render(
         set_vars or [],
         required_vars=required_vars
     )
+
+    import json
+    # 使用 default=str 来处理 Path 等不可序列化对象
+    rich_debug(f"最终上下文准备就绪: {json.dumps(context, indent=2, default=str)}")
     
     rich_echo("--- 4. 开始渲染 ---", bold=True)
     
@@ -124,7 +134,16 @@ def render(
         try:
             template = env.from_string(template_content)
             output = template.render(render_context)
-            print(output, end='')
+            
+            # --- Post-Render Evaluation ---
+            # If the entire rendered output is another dynamic variable, process it.
+            if output.startswith('$'):
+                # The key_path 'final_render' is arbitrary for logging purposes.
+                final_output = process_value("final_render", output[1:], repo_root)
+                print(final_output, end='')
+            else:
+                print(output, end='')
+
         except Exception as e:
             rich_echo(f"[错误] 渲染模板失败: {e}", fg=typer.colors.RED)
             raise typer.Exit(1)

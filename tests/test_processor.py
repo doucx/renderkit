@@ -13,7 +13,7 @@ def test_process_value_at_syntax(tmp_path: Path):
 
 def test_process_value_at_syntax_no_repo_root():
     result = process_value("key", "@test.txt", None)
-    assert "repo_root未定义" in result
+    assert "repo_root undefined" in result
 
 def test_process_value_file_uri_absolute(tmp_path: Path):
     file_path = tmp_path / "absolute.txt"
